@@ -7,7 +7,7 @@ import Link from "next/link";
 import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
 import { ASSETS } from "../lib/constants";
-import { Download, RefreshCw, MessageCircle, ZoomIn, ZoomOut, Check, ChevronLeft, ChevronRight } from "lucide-react";
+import { Download, RefreshCw, MessageCircle, ZoomIn, ZoomOut, Check, ChevronLeft, ChevronRight, Edit, Eye } from "lucide-react";
 
 // Types
 type CharmSlot = 'A' | 'B' | 'C';
@@ -22,55 +22,137 @@ type SelectionState = {
 };
 
 export default function CustomizerPage() {
-    // State
-    const [state, setState] = useState<SelectionState>({
-        baseIndex: 0,
-        slots: { A: null, B: null, C: null }, // Initialize with empty slots
-        zoom: 0.65,
-    });
-    const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-
-    const canvasRef = useRef<HTMLCanvasElement>(null);
-
-    // Constants
-    const CANVAS_SIZE = 800; // Internal resolution
-
-    // Coordinates for Charms (Approximate based on vertical stacking assumption)
-    // These are relative percentages (0.0 to 1.0) of the canvas size
-    const CHARM_POSITIONS = {
-        C: { x: 0.5, y: 0.31, scale: 0.28 }, // Top
-        B: { x: 0.5, y: 0.58, scale: 0.28 },  // Middle
-        A: { x: 0.5, y: 0.85, scale: 0.28 }, // Bottom
+    // Types
+    type Mode = 'fixed' | 'manual';
+    type CharmItem = {
+        id: string;
+        charmIndex: number;
+        x: number;
+        y: number;
+        z: number; // Scale
     };
 
-    // Helper to load image
+    // State
+    const [state, setState] = useState<{
+        mode: Mode;
+        baseIndex: number;
+        slots: { A: number | null; B: number | null; C: number | null };
+        manualItems: CharmItem[];
+        zoom: number;
+    }>({
+        mode: 'fixed',
+        baseIndex: 0,
+        slots: { A: null, B: null, C: null },
+        manualItems: [],
+        zoom: 0.65,
+    });
+
+    // Manual Mode Specific State
+    const [isEditing, setIsEditing] = useState(true); // Toggle between Edit (Guides/Drag) and Preview (Clean)
+
+    const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+    const [draggedItem, setDraggedItem] = useState<string | null>(null); // ID of item being moved on canvas
+    const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+    const imageCache = useRef<Map<string, HTMLImageElement>>(new Map());
+
+    // Custom Confirm Modal State
+    const [confirmModal, setConfirmModal] = useState<{
+        isOpen: boolean;
+        title: string;
+        message: string;
+        onConfirm: () => void;
+    }>({
+        isOpen: false,
+        title: "",
+        message: "",
+        onConfirm: () => { },
+    });
+
+    const showConfirm = (title: string, message: string, onConfirm: () => void) => {
+        setConfirmModal({ isOpen: true, title, message, onConfirm });
+    };
+
+    const closeConfirm = () => {
+        setConfirmModal(prev => ({ ...prev, isOpen: false }));
+    };
+
+    // Constants
+    const CANVAS_SIZE = 800;
+
+    // Fixed Positions
+    const CHARM_POSITIONS = {
+        C: { x: 0.5, y: 0.31, scale: 0.28 },
+        B: { x: 0.5, y: 0.58, scale: 0.28 },
+        A: { x: 0.5, y: 0.85, scale: 0.28 },
+    };
+
+    // Helper: Load Image with Cache
     const loadImage = (src: string): Promise<HTMLImageElement> => {
+        if (imageCache.current.has(src)) {
+            return Promise.resolve(imageCache.current.get(src)!);
+        }
         return new Promise((resolve, reject) => {
             const img = new window.Image();
             img.crossOrigin = "anonymous";
             img.src = src;
-            img.onload = () => resolve(img);
+            img.onload = () => {
+                imageCache.current.set(src, img);
+                resolve(img);
+            };
             img.onerror = reject;
         });
     };
 
-    // Draw Canvas
+    // Helper: Screen to Canvas Coords
+    const getCanvasCoords = (e: React.MouseEvent | React.TouchEvent | MouseEvent | TouchEvent, canvas: HTMLCanvasElement) => {
+        const rect = canvas.getBoundingClientRect();
+        let clientX, clientY;
+
+        if ('touches' in e) {
+            clientX = e.touches[0].clientX;
+            clientY = e.touches[0].clientY;
+        } else {
+            clientX = (e as React.MouseEvent).clientX;
+            clientY = (e as React.MouseEvent).clientY;
+        }
+
+        const cx = rect.width / 2;
+        const cy = rect.height / 2;
+
+        const relX = (clientX - rect.left - cx) / state.zoom + (CANVAS_SIZE / 2);
+        const relY = (clientY - rect.top - cy) / state.zoom + (CANVAS_SIZE / 2);
+
+        return {
+            x: relX / CANVAS_SIZE,
+            y: relY / CANVAS_SIZE
+        };
+    };
+
+    // Generator Preview
+    const updatePreview = () => {
+        if (canvasRef.current) {
+            // We need to render cleanly without guides for the preview
+            // But getting dataURL captures what's currently on canvas.
+            // If guides are on, they will be captured. 
+            // For now, let's just capture what is seen. User should switch to "Preview" mode to generate clean image.
+            setPreviewUrl(canvasRef.current.toDataURL("image/png"));
+        }
+    };
+
+    // -------------------
+    // RENDER LOGIC
+    // -------------------
     useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
-
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
 
         const render = async () => {
-            // Clear
             ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
 
-            // Background (Optional: Gradient or Grid)
-            // ctx.fillStyle = "#ffffff";
-            // ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
-
-            // Save context for Zoom
             ctx.save();
             ctx.translate(CANVAS_SIZE / 2, CANVAS_SIZE / 2);
             ctx.scale(state.zoom, state.zoom);
@@ -81,173 +163,240 @@ export default function CustomizerPage() {
                 const basePath = ASSETS.keychains[state.baseIndex];
                 const baseImg = await loadImage(basePath);
 
-                // Draw base centered, preserving aspect ratio
-                // Assume base images are roughly square or fit within a certain area
                 const baseScale = 0.8;
                 const bw = CANVAS_SIZE * baseScale;
                 const bh = (bw / baseImg.width) * baseImg.height;
                 const bx = (CANVAS_SIZE - bw) / 2;
                 const by = (CANVAS_SIZE - bh) / 2;
 
-                // Shadow for base
                 ctx.shadowColor = "rgba(0,0,0,0.2)";
                 ctx.shadowBlur = 20;
                 ctx.shadowOffsetY = 10;
                 ctx.drawImage(baseImg, bx, by, bw, bh);
+
+                // Draw Base Center Guide
+                if (state.mode === 'manual' && isEditing) {
+                    // Removed gray border guide as requested
+                }
+
                 ctx.shadowColor = "transparent";
 
-                // 2. Draw Charms (Order: A->B->C or C->B->A depending on layer? C is Top, so draw last?)
-                // Let's draw Bottom (A) -> Middle (B) -> Top (C) to overlay correctly up the chain
-                // Actually, physically on a keychain, the top one covers the string of the bottom one... 
-                // tough to say without seeing the assets. I'll draw A then B then C.
+                // 2. Draw Charms
+                const drawItem = async (path: string, x: number, y: number, scale: number, isSelected: boolean) => {
+                    const img = await loadImage(path);
+                    const cw = CANVAS_SIZE * scale;
+                    const ch = (cw / img.width) * img.height;
+                    const cx = (CANVAS_SIZE * x) - (cw / 2);
+                    const cy = (CANVAS_SIZE * y) - (ch / 2);
 
-                const drawCharm = async (slot: CharmSlot) => {
-                    const charmIndex = state.slots[slot];
-                    if (charmIndex === null) return;
-
-                    const charmPath = ASSETS.animals[charmIndex];
-                    const charmImg = await loadImage(charmPath);
-
-                    const pos = CHARM_POSITIONS[slot];
-                    const cw = CANVAS_SIZE * pos.scale;
-                    const ch = (cw / charmImg.width) * charmImg.height;
-                    const cx = (CANVAS_SIZE * pos.x) - (cw / 2);
-                    const cy = (CANVAS_SIZE * pos.y) - (ch / 2);
-
-                    // Slight shadow for depth between charms
                     ctx.shadowColor = "rgba(0,0,0,0.1)";
                     ctx.shadowBlur = 5;
-                    ctx.drawImage(charmImg, cx, cy, cw, ch);
+                    ctx.drawImage(img, cx, cy, cw, ch);
                     ctx.shadowColor = "transparent";
+
+                    if (state.mode === 'manual' && isEditing && isSelected) {
+                        ctx.strokeStyle = '#10B981';
+                        ctx.lineWidth = 2 / state.zoom;
+                        ctx.setLineDash([5, 5]);
+                        ctx.strokeRect(cx - 2, cy - 2, cw + 4, ch + 4);
+                        ctx.setLineDash([]);
+
+                        // Center Dot Handle
+                        ctx.fillStyle = '#10B981';
+                        ctx.beginPath();
+                        ctx.arc(cx + cw / 2, cy + ch / 2, 6 / state.zoom, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
                 };
 
-                await drawCharm('A');
-                await drawCharm('B');
-                await drawCharm('C');
-
-                // Update Preview URL after render
-                // Small delay to ensure paint
-                setTimeout(() => {
-                    if (canvasRef.current) {
-                        setPreviewUrl(canvasRef.current.toDataURL("image/png"));
+                if (state.mode === 'fixed') {
+                    if (state.slots.A !== null) await drawItem(ASSETS.animals[state.slots.A], CHARM_POSITIONS.A.x, CHARM_POSITIONS.A.y, CHARM_POSITIONS.A.scale, false);
+                    if (state.slots.B !== null) await drawItem(ASSETS.animals[state.slots.B], CHARM_POSITIONS.B.x, CHARM_POSITIONS.B.y, CHARM_POSITIONS.B.scale, false);
+                    if (state.slots.C !== null) await drawItem(ASSETS.animals[state.slots.C], CHARM_POSITIONS.C.x, CHARM_POSITIONS.C.y, CHARM_POSITIONS.C.scale, false);
+                } else {
+                    for (const item of state.manualItems) {
+                        await drawItem(ASSETS.animals[item.charmIndex], item.x, item.y, item.z, item.id === draggedItem);
                     }
-                }, 100);
+                }
+
+                // 3. Draw Guides (Manual Mode & Editing Only)
+                if (state.mode === 'manual' && isEditing) {
+                    // Reset shadow
+                    ctx.shadowColor = "transparent";
+                }
 
             } catch (err) {
-                console.error("Failed to render canvas", err);
+                console.error("Render error", err);
             }
-
             ctx.restore();
         };
 
         render();
-    }, [state]); // Re-run only when state changes
 
-    // Actions
-    const handleDownload = () => {
-        if (!previewUrl) return;
-        const link = document.createElement("a");
-        link.download = `ongoing-keychain-${Date.now()}.png`;
-        link.href = previewUrl;
-        link.click();
-    };
+        // Initial preview generation only if not dragging
+        if (!draggedItem) {
+            // Debounce preview update slightly to avoid hitting it too hard during non-drag re-renders
+            const timeout = setTimeout(updatePreview, 500);
+            return () => clearTimeout(timeout);
+        }
+    }, [state, isEditing, draggedItem]);
 
-    const handleWhatsApp = () => {
-        // Construct message
-        const baseName = `Base Model ${state.baseIndex + 1}`;
-        const charmA = state.slots.A !== null ? `Charm ${state.slots.A + 1}` : "Empty";
-        const charmB = state.slots.B !== null ? `Charm ${state.slots.B + 1}` : "Empty";
-        const charmC = state.slots.C !== null ? `Charm ${state.slots.C + 1}` : "Empty";
+    // -------------------
+    // MODE SWITCHING
+    // -------------------
+    const switchMode = (newMode: Mode) => {
+        if (newMode === state.mode) return;
 
-        const text = `Halo Ongoing Project! Saya mau order custom keychain dengan detail:\n\n` +
-            `🏷️ Base: ${baseName}\n` +
-            `🐶 Slot A (Bawah): ${charmA}\n` +
-            `🐱 Slot B (Tengah): ${charmB}\n` +
-            `🐰 Slot C (Atas): ${charmC}\n\n` +
-            `*Gambar desain saya lampirkan manual setelah pesan ini.*\n` +
-            `Mohon info total harganya ya! Terima kasih.`;
+        if (newMode === 'manual' && state.mode === 'fixed') {
+            // Convert slots to manual items
+            const newItems: CharmItem[] = [];
+            if (state.slots.A !== null) newItems.push({ id: crypto.randomUUID(), charmIndex: state.slots.A, x: CHARM_POSITIONS.A.x, y: CHARM_POSITIONS.A.y, z: CHARM_POSITIONS.A.scale });
+            if (state.slots.B !== null) newItems.push({ id: crypto.randomUUID(), charmIndex: state.slots.B, x: CHARM_POSITIONS.B.x, y: CHARM_POSITIONS.B.y, z: CHARM_POSITIONS.B.scale });
+            if (state.slots.C !== null) newItems.push({ id: crypto.randomUUID(), charmIndex: state.slots.C, x: CHARM_POSITIONS.C.x, y: CHARM_POSITIONS.C.y, z: CHARM_POSITIONS.C.scale });
 
-        const encodedText = encodeURIComponent(text);
-        window.open(`https://wa.me/6288218541267?text=${encodedText}`, '_blank');
-    };
-
-    const handleReset = () => {
-        if (confirm("Reset desain ke awal?")) {
-            setState({
-                baseIndex: 0,
-                slots: { A: null, B: null, C: null },
-                zoom: 0.65
-            });
+            setState(s => ({ ...s, mode: 'manual', manualItems: newItems }));
+            setIsEditing(true); // Default to edit mode
+        } else if (newMode === 'fixed') {
+            showConfirm(
+                "Kembali ke Template Mode?",
+                "Posisi manual Anda akan hilang jika kembali ke mode ini. Lanjutkan?",
+                () => setState(s => ({ ...s, mode: 'fixed' }))
+            );
         }
     };
 
-    // Slot Controls Component
-    const SlotControl = ({ label, slot }: { label: string, slot: CharmSlot }) => (
-        <div className="mb-6">
-            <div className="flex justify-between items-center mb-2">
-                <span className="text-sm font-semibold text-gray-700">{label}</span>
-                {state.slots[slot] !== null && (
-                    <button
-                        onClick={() => setState(s => ({ ...s, slots: { ...s.slots, [slot]: null } }))}
-                        className="text-xs text-red-500 hover:text-red-600"
-                    >
-                        Hapus
-                    </button>
-                )}
-            </div>
-            <div className="flex gap-3 overflow-x-auto pb-4 snap-x scrollbar-thin scrollbar-thumb-gray-200 scrollbar-track-transparent">
-                {ASSETS.animals.map((img, idx) => (
-                    <button
-                        key={idx}
-                        onClick={() => setState(s => ({ ...s, slots: { ...s.slots, [slot]: idx } }))}
-                        className={`
-                flex-shrink-0 w-16 h-16 rounded-xl border-2 overflow-hidden bg-white relative transition-all snap-start
-                ${state.slots[slot] === idx ? 'border-brand-mint ring-2 ring-brand-mint/20' : 'border-gray-200 hover:border-brand-mint/50'}
-            `}
-                    >
-                        <Image src={img} alt={`Charm ${idx}`} fill className="object-contain p-1" />
-                        {state.slots[slot] === idx && (
-                            <div className="absolute inset-0 bg-brand-mint/10 flex items-center justify-center">
-                                <Check size={12} className="text-brand-mint bg-white rounded-full p-0.5" />
-                            </div>
-                        )}
-                    </button>
-                ))}
-            </div>
-        </div>
-    );
+    // -------------------
+    // CANVAS INTERACTION (MANUAL MODE)
+    // -------------------
+    const handleCanvasMouseDown = (e: React.MouseEvent) => {
+        if (state.mode !== 'manual' || !isEditing) return;
+        const canvas = canvasRef.current;
+        if (!canvas) return;
 
-    const getCharmThumb = (slot: CharmSlot) => {
-        const idx = state.slots[slot];
-        if (idx === null) return null;
-        return ASSETS.animals[idx];
+        const coords = getCanvasCoords(e, canvas);
+
+        const clickedItem = [...state.manualItems].reverse().find(item => {
+            const dx = coords.x - item.x;
+            const dy = coords.y - item.y;
+            // Hit radius increased to matches charm scale (~0.28/2 = 0.14)
+            return (dx * dx + dy * dy) < (0.14 * 0.14);
+        });
+
+        if (clickedItem) {
+            setDraggedItem(clickedItem.id);
+            setDragOffset({ x: coords.x - clickedItem.x, y: coords.y - clickedItem.y });
+        }
+    };
+
+    const handleCanvasMouseMove = (e: React.MouseEvent) => {
+        if (!draggedItem || state.mode !== 'manual' || !isEditing) return;
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+
+        const coords = getCanvasCoords(e, canvas);
+
+        setState(s => ({
+            ...s,
+            manualItems: s.manualItems.map(item =>
+                item.id === draggedItem
+                    ? { ...item, x: coords.x - dragOffset.x, y: coords.y - dragOffset.y }
+                    : item
+            )
+        }));
+    };
+
+    const handleCanvasMouseUp = () => {
+        if (draggedItem) {
+            setDraggedItem(null);
+            updatePreview(); // Update preview when drag ends
+        }
+    };
+
+    // Drag from Sidebar
+    const handleDragStart = (e: React.DragEvent, charmIndex: number) => {
+        e.dataTransfer.setData("charmIndex", charmIndex.toString());
+    };
+
+    const handleDrop = (e: React.DragEvent) => {
+        if (state.mode !== 'manual' || !isEditing) return;
+        e.preventDefault();
+        const charmIndex = parseInt(e.dataTransfer.getData("charmIndex"));
+        if (isNaN(charmIndex)) return;
+
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const coords = getCanvasCoords(e, canvas);
+
+        const newItem: CharmItem = {
+            id: crypto.randomUUID(),
+            charmIndex,
+            x: coords.x,
+            y: coords.y,
+            z: 0.28
+        };
+
+        setState(s => ({ ...s, manualItems: [...s.manualItems, newItem] }));
+        setTimeout(updatePreview, 100);
+    };
+
+    // -------------------
+    // UTILS
+    // -------------------
+    const handleWhatsApp = () => {
+        const text = `Halo Ongoing Project! Saya mau order custom keychain.\n\n` +
+            `*Gambar desain saya lampirkan manual setelah pesan ini.*\n\n` +
+            `Mohon info total harganya ya! Terima kasih.`;
+        window.open(`https://wa.me/6288218541267?text=${encodeURIComponent(text)}`, '_blank');
+    };
+
+    const handleDownload = () => {
+        // If in edit mode, warn user or temporarily render clean?
+        // Ideally we grab the previewUrl which SHOULD be clean if they switched to preview mode
+        // But let's generate a clean grab right now just in case
+        if (!canvasRef.current) return;
+        const link = document.createElement("a");
+        link.download = `ongoing-keychain-${Date.now()}.png`;
+        link.href = canvasRef.current.toDataURL("image/png");
+        link.click();
+    };
+
+    const handleReset = () => {
+        showConfirm(
+            "Reset Desain?",
+            "Semua perubahan akan dihapus dan kembali ke awal.",
+            () => {
+                setState({
+                    mode: 'fixed',
+                    baseIndex: 0,
+                    slots: { A: null, B: null, C: null },
+                    manualItems: [],
+                    zoom: 0.65
+                });
+                setIsEditing(true);
+            }
+        );
     };
 
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col">
             <Navbar />
-
             <main className="flex-grow pt-24 pb-10 px-4 sm:px-6 lg:px-8 max-w-[1600px] mx-auto w-full h-full">
                 <h1 className="sr-only">Studio Kustomisasi Keychain</h1>
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 h-full items-start">
 
-                    {/* LEFT COLUMN: BASE SELECTION */}
+                    {/* LEFT: BASE */}
                     <div className="lg:col-span-3">
                         <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
                             <h2 className="text-2xl font-bold text-gray-900 mb-6 flex items-center gap-3">
                                 <span className="w-10 h-10 rounded-full bg-brand-yellow/20 flex items-center justify-center text-brand-yellow-dark text-lg">1</span>
                                 Pilih Base
                             </h2>
-
                             <div className="grid grid-cols-2 gap-4">
                                 {ASSETS.keychains.map((img, idx) => (
                                     <button
                                         key={idx}
                                         onClick={() => setState(s => ({ ...s, baseIndex: idx }))}
-                                        className={`
-                                    relative aspect-square rounded-xl border-2 transition-all overflow-hidden bg-gray-50
-                                    ${state.baseIndex === idx ? 'border-brand-mint ring-4 ring-brand-mint/10' : 'border-transparent hover:border-brand-mint/50'}
-                                `}
+                                        className={`relative aspect-square rounded-xl border-2 transition-all overflow-hidden bg-gray-50 ${state.baseIndex === idx ? 'border-brand-mint ring-4 ring-brand-mint/10' : 'border-transparent hover:border-brand-mint/50'}`}
                                     >
                                         <Image src={img} alt={`Base ${idx}`} fill className="object-contain p-2" />
                                     </button>
@@ -256,146 +405,250 @@ export default function CustomizerPage() {
                         </div>
                     </div>
 
-                    {/* MIDDLE COLUMN: PREVIEW */}
+                    {/* MIDDLE: CANVAS */}
                     <div className="lg:col-span-5 flex flex-col lg:sticky lg:top-28">
-                        <div className="flex-grow bg-white rounded-3xl shadow-lg border border-gray-100 relative overflow-hidden flex items-center justify-center min-h-[400px] aspect-square">
-                            {/* Background Pattern */}
-                            <div className="absolute inset-0 opacity-5" style={{
-                                backgroundImage: 'radial-gradient(#10B981 1px, transparent 1px)',
-                                backgroundSize: '20px 20px'
-                            }} />
+                        {/* Mode Toggles */}
+                        <div className="flex gap-2 mb-4">
+                            {/* Fixed vs Manual */}
+                            <div className="bg-white p-1 rounded-xl shadow-sm border border-gray-200 flex flex-1">
+                                <button
+                                    onClick={() => switchMode('fixed')}
+                                    className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${state.mode === 'fixed' ? 'bg-brand-mint text-white shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}
+                                >
+                                    Template
+                                </button>
+                                <button
+                                    onClick={() => switchMode('manual')}
+                                    className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${state.mode === 'manual' ? 'bg-brand-mint text-white shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}
+                                >
+                                    Free Drag
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Editor Toolbar (Manual Only) */}
+                        {state.mode === 'manual' && (
+                            <div className="flex justify-between items-center mb-4 px-2">
+                                <div className="flex items-center gap-2 bg-white rounded-lg p-1 border border-gray-200 shadow-sm">
+                                    <button
+                                        onClick={() => setIsEditing(true)}
+                                        className={`px-3 py-1.5 text-xs font-semibold rounded-md flex items-center gap-1 transition-colors ${isEditing ? 'bg-brand-yellow text-brand-dark' : 'text-gray-500 hover:text-gray-900'}`}
+                                    >
+                                        <Edit size={14} /> Editor
+                                    </button>
+                                    <button
+                                        onClick={() => setIsEditing(false)}
+                                        className={`px-3 py-1.5 text-xs font-semibold rounded-md flex items-center gap-1 transition-colors ${!isEditing ? 'bg-gray-800 text-white' : 'text-gray-500 hover:text-gray-900'}`}
+                                    >
+                                        <Eye size={14} /> Preview
+                                    </button>
+                                </div>
+                                {isEditing && <span className="text-xs text-brand-mint font-medium animate-pulse">● Editing Active</span>}
+                            </div>
+                        )}
+
+                        <div
+                            className="flex-grow bg-white rounded-3xl shadow-lg border border-gray-100 relative overflow-hidden flex items-center justify-center min-h-[400px] aspect-square group"
+                            onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                            onDrop={handleDrop}
+                            onWheel={(e) => e.preventDefault()}
+                            style={{ touchAction: 'none' }}
+                        >
+                            <div className={`absolute inset-0 transition-opacity duration-300 ${isEditing ? 'opacity-5' : 'opacity-0'}`} style={{ backgroundImage: 'radial-gradient(#10B981 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
 
                             <canvas
                                 ref={canvasRef}
                                 width={CANVAS_SIZE}
                                 height={CANVAS_SIZE}
-                                className="w-full h-full max-w-[500px] max-h-[500px] object-contain drop-shadow-2xl"
+                                className={`w-full h-full max-w-[500px] max-h-[500px] object-contain drop-shadow-2xl transition-all ${state.mode === 'manual' && isEditing ? 'cursor-move' : ''}`}
+                                onMouseDown={handleCanvasMouseDown}
+                                onMouseMove={handleCanvasMouseMove}
+                                onMouseUp={handleCanvasMouseUp}
+                                onMouseLeave={handleCanvasMouseUp}
                             />
 
-                            {/* Zoom Controls */}
-                            <div className="absolute bottom-6 right-6 flex gap-2">
-                                <button
-                                    onClick={() => setState(s => ({ ...s, zoom: Math.min(s.zoom + 0.1, 2) }))}
-                                    className="bg-white p-2.5 rounded-full shadow-lg border border-gray-100 hover:bg-gray-50 text-gray-700"
-                                >
-                                    <ZoomIn size={20} />
-                                </button>
-                                <button
-                                    onClick={() => setState(s => ({ ...s, zoom: Math.max(s.zoom - 0.1, 0.4) }))}
-                                    className="bg-white p-2.5 rounded-full shadow-lg border border-gray-100 hover:bg-gray-50 text-gray-700"
-                                >
-                                    <ZoomOut size={20} />
-                                </button>
+                            {/* Zoom Buttons */}
+                            <div className="absolute bottom-6 right-6 flex gap-2 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
+                                <div className="pointer-events-auto flex gap-2">
+                                    <button onClick={() => setState(s => ({ ...s, zoom: Math.min(s.zoom + 0.1, 2) }))} className="bg-white p-2.5 rounded-full shadow-lg border border-gray-100 text-gray-700">
+                                        <ZoomIn size={20} />
+                                    </button>
+                                    <button onClick={() => setState(s => ({ ...s, zoom: Math.max(s.zoom - 0.1, 0.4) }))} className="bg-white p-2.5 rounded-full shadow-lg border border-gray-100 text-gray-700">
+                                        <ZoomOut size={20} />
+                                    </button>
+                                </div>
                             </div>
                         </div>
                         <div className="mt-4 text-center text-gray-400 text-sm">
-                            Scroll ke bawah untuk melihat ringkasan pesanan
+                            {state.mode === 'manual'
+                                ? (isEditing ? "Drag charm untuk mengatur posisi. Gunakan 'Preview' untuk melihat hasil akhir." : "Mode Preview aktif. Kembali ke Editor untuk mengubah.")
+                                : "Pilih slot di kanan untuk menambahkan charm secara otomatis."}
                         </div>
                     </div>
 
-                    {/* RIGHT COLUMN: CHARMS & ACTIONS */}
+                    {/* RIGHT: CHARMS */}
                     <div className="lg:col-span-4 flex flex-col gap-6">
-
-                        {/* Charms Selector */}
                         <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
                             <h2 className="text-2xl font-bold text-gray-900 mb-6 flex items-center gap-3">
                                 <span className="w-10 h-10 rounded-full bg-brand-pink/20 flex items-center justify-center text-brand-pink-dark text-lg">2</span>
                                 Pilih Charms
                             </h2>
 
-                            <SlotControl label="Atas" slot="C" />
-                            <SlotControl label="Tengah" slot="B" />
-                            <SlotControl label="Bawah" slot="A" />
+                            {state.mode === 'fixed' ? (
+                                <>
+                                    <SlotControl
+                                        label="Atas"
+                                        isSelected={state.slots.C !== null}
+                                        onClear={() => setState(s => ({ ...s, slots: { ...s.slots, C: null } }))}
+                                    >
+                                        <CharmList selectedIdx={state.slots.C} onSelect={(idx) => setState(s => ({ ...s, slots: { ...s.slots, C: idx } }))} />
+                                    </SlotControl>
+                                    <SlotControl
+                                        label="Tengah"
+                                        isSelected={state.slots.B !== null}
+                                        onClear={() => setState(s => ({ ...s, slots: { ...s.slots, B: null } }))}
+                                    >
+                                        <CharmList selectedIdx={state.slots.B} onSelect={(idx) => setState(s => ({ ...s, slots: { ...s.slots, B: idx } }))} />
+                                    </SlotControl>
+                                    <SlotControl
+                                        label="Bawah"
+                                        isSelected={state.slots.A !== null}
+                                        onClear={() => setState(s => ({ ...s, slots: { ...s.slots, A: null } }))}
+                                    >
+                                        <CharmList selectedIdx={state.slots.A} onSelect={(idx) => setState(s => ({ ...s, slots: { ...s.slots, A: idx } }))} />
+                                    </SlotControl>
+                                </>
+                            ) : (
+                                <div>
+                                    <div className={`transition-opacity ${!isEditing ? 'opacity-50 pointer-events-none' : ''}`}>
+                                        <p className="text-sm text-gray-500 mb-4 px-1">Drag gambar ke canvas (Editor Mode Only).</p>
+                                        <div className="grid grid-cols-4 gap-2">
+                                            {ASSETS.animals.map((img, idx) => (
+                                                <div
+                                                    key={idx}
+                                                    draggable={isEditing}
+                                                    onDragStart={(e) => handleDragStart(e, idx)}
+                                                    className="aspect-square bg-gray-50 rounded-lg border border-gray-200 cursor-move hover:border-brand-mint overflow-hidden relative"
+                                                    onClick={() => {
+                                                        if (isEditing) {
+                                                            const newItem: CharmItem = { id: crypto.randomUUID(), charmIndex: idx, x: 0.5, y: 0.5, z: 0.28 };
+                                                            setState(s => ({ ...s, manualItems: [...s.manualItems, newItem] }));
+                                                            setTimeout(updatePreview, 100);
+                                                        }
+                                                    }}
+                                                >
+                                                    <Image src={img} alt="Charm" fill className="object-contain p-1" />
+                                                </div>
+                                            ))}
+                                        </div>
+                                        {state.manualItems.length > 0 && (
+                                            <button
+                                                onClick={() => setState(s => ({ ...s, manualItems: [] }))}
+                                                className="mt-4 w-full py-2 text-sm text-red-500 hover:bg-red-50 rounded-lg"
+                                            >
+                                                Hapus Semua Charm
+                                            </button>
+                                        )}
+                                    </div>
+                                    {!isEditing && <p className="text-xs text-center text-red-500 mt-2">Beralih ke Editor Mode untuk menambah charm.</p>}
+                                </div>
+                            )}
                         </div>
 
-                        {/* Summary & Visualization */}
+                        {/* SUMMARY */}
                         <div className="bg-white rounded-2xl p-6 shadow-lg border border-brand-mint/20 relative overflow-hidden">
-                            <div className="absolute top-0 right-0 w-32 h-32 bg-brand-mint/10 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none" />
-
                             <h3 className="text-2xl font-bold text-gray-900 mb-6 flex items-center gap-3">
                                 <span className="w-10 h-10 rounded-full bg-brand-mint/20 flex items-center justify-center text-brand-mint-dark text-lg">3</span>
                                 Ringkasan Pesanan
                             </h3>
-
-                            {/* Visual Summary */}
                             <div className="mb-6 bg-gray-50 rounded-xl p-4 border border-gray-100">
                                 <div className="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wider">Preview Hasil</div>
-
-                                <div className="flex gap-4 items-center">
-                                    {/* Main Preview Thumbnail */}
-                                    <div className="relative w-24 h-24 bg-white rounded-lg border border-gray-200 overflow-hidden flex-shrink-0">
-                                        {previewUrl ? (
-                                            <Image src={previewUrl} alt="Preview" fill className="object-contain" />
-                                        ) : (
-                                            <div className="w-full h-full flex items-center justify-center text-gray-300 transform scale-50">Loading...</div>
-                                        )}
-                                    </div>
-
-                                    {/* Selected Items List */}
-                                    <div className="flex-grow space-y-2">
-                                        <div className="flex -space-x-2">
-                                            {/* Base */}
-                                            <div className="w-10 h-10 rounded-full bg-white border border-gray-200 relative overflow-hidden" title="Base">
-                                                <Image src={ASSETS.keychains[state.baseIndex]} alt="Base" fill className="object-contain p-1" />
-                                            </div>
-                                            {/* Charms */}
-                                            {state.slots.A !== null && (
-                                                <div className="w-10 h-10 rounded-full bg-white border border-gray-200 relative overflow-hidden" title="Slot A">
-                                                    <Image src={ASSETS.animals[state.slots.A]} alt="Charm A" fill className="object-contain p-1" />
-                                                </div>
-                                            )}
-                                            {state.slots.B !== null && (
-                                                <div className="w-10 h-10 rounded-full bg-white border border-gray-200 relative overflow-hidden" title="Slot B">
-                                                    <Image src={ASSETS.animals[state.slots.B]} alt="Charm B" fill className="object-contain p-1" />
-                                                </div>
-                                            )}
-                                            {state.slots.C !== null && (
-                                                <div className="w-10 h-10 rounded-full bg-white border border-gray-200 relative overflow-hidden" title="Slot C">
-                                                    <Image src={ASSETS.animals[state.slots.C]} alt="Charm C" fill className="object-contain p-1" />
-                                                </div>
-                                            )}
-                                        </div>
-                                        <p className="text-xs text-gray-500">
-                                            Base + {[state.slots.A, state.slots.B, state.slots.C].filter(x => x !== null).length} Charms
-                                        </p>
-                                    </div>
+                                <div className="relative w-full aspect-square bg-white rounded-lg border border-gray-200 overflow-hidden">
+                                    {previewUrl ? (
+                                        <Image src={previewUrl} alt="Preview" fill className="object-contain" />
+                                    ) : (
+                                        <div className="flex items-center justify-center h-full text-gray-300">Loading...</div>
+                                    )}
                                 </div>
                             </div>
-
                             <div className="space-y-3">
-                                <button
-                                    onClick={handleWhatsApp}
-                                    className="w-full flex items-center justify-center gap-2 bg-green-500 hover:bg-green-600 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-green-500/20 transition-all hover:-translate-y-0.5"
-                                >
-                                    <MessageCircle size={20} />
-                                    Order via WhatsApp
+                                <button onClick={handleWhatsApp} className="w-full flex items-center justify-center gap-2 bg-green-500 hover:bg-green-600 text-white font-bold py-3.5 rounded-xl shadow-lg transition-all hover:-translate-y-0.5">
+                                    <MessageCircle size={20} /> Order via WhatsApp
                                 </button>
-
-                                <div className="grid grid-cols-2 gap-3">
-                                    <button
-                                        onClick={handleDownload}
-                                        className="flex items-center justify-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold py-3 rounded-xl transition-colors text-sm"
-                                    >
-                                        <Download size={16} />
-                                        Save Image
-                                    </button>
-                                    <button
-                                        onClick={handleReset}
-                                        className="flex items-center justify-center gap-2 bg-gray-100 hover:bg-red-50 text-gray-700 hover:text-red-600 font-semibold py-3 rounded-xl transition-colors text-sm"
-                                    >
-                                        <RefreshCw size={16} />
-                                        Reset
-                                    </button>
-                                </div>
-                                <p className="text-xs text-center text-gray-400 mt-2">
-                                    *Simpan gambar desain sebelum order untuk dikirimkan ke admin.
-                                </p>
+                                <button onClick={handleDownload} className="w-full flex items-center justify-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold py-3 rounded-xl transition-colors text-sm">
+                                    <Download size={16} /> Save Image
+                                </button>
+                                <button
+                                    onClick={handleReset}
+                                    className="w-full flex items-center justify-center gap-2 bg-gray-100 hover:bg-red-50 text-gray-700 hover:text-red-600 font-semibold py-3 rounded-xl transition-colors text-sm"
+                                >
+                                    <RefreshCw size={16} />
+                                    Reset
+                                </button>
+                                <p className="text-xs text-center text-gray-400 mt-2">*Simpan gambar desain sebelum order.</p>
                             </div>
                         </div>
                     </div>
-
                 </div>
             </main>
+
+            {/* Custom Confirmation Modal */}
+            {confirmModal.isOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+                    <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl scale-100 animate-in zoom-in-95 duration-200">
+                        <h3 className="text-xl font-bold text-gray-900 mb-2">{confirmModal.title}</h3>
+                        <p className="text-gray-600 mb-6">{confirmModal.message}</p>
+                        <div className="flex gap-3 justify-end">
+                            <button
+                                onClick={closeConfirm}
+                                className="px-4 py-2 text-gray-600 font-medium hover:bg-gray-100 rounded-lg transition-colors"
+                            >
+                                Batal
+                            </button>
+                            <button
+                                onClick={() => {
+                                    confirmModal.onConfirm();
+                                    closeConfirm();
+                                }}
+                                className="px-4 py-2 bg-brand-mint text-white font-bold rounded-lg hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/30"
+                            >
+                                Ya, Lanjutkan
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
+
+// Subcomponents
+function SlotControl({ label, isSelected, onClear, children }: { label: string, isSelected: boolean, onClear: () => void, children: React.ReactNode }) {
+    return (
+        <div className="mb-6">
+            <div className="flex justify-between items-center mb-2">
+                <span className="text-sm font-semibold text-gray-700">{label}</span>
+                {isSelected && <button onClick={onClear} className="text-xs text-red-500 hover:text-red-600">Hapus</button>}
+            </div>
+            {children}
+        </div>
+    );
+}
+
+function CharmList({ selectedIdx, onSelect }: { selectedIdx: number | null, onSelect: (i: number) => void }) {
+    return (
+        <div className="flex gap-3 overflow-x-auto pb-4 snap-x scrollbar-thin scrollbar-thumb-gray-200 scrollbar-track-transparent">
+            {ASSETS.animals.map((img, idx) => (
+                <button
+                    key={idx}
+                    onClick={() => onSelect(idx)}
+                    className={`flex-shrink-0 w-16 h-16 rounded-xl border-2 overflow-hidden bg-white relative transition-all snap-start ${selectedIdx === idx ? 'border-brand-mint ring-2 ring-brand-mint/20' : 'border-gray-200 hover:border-brand-mint/50'}`}
+                >
+                    <Image src={img} alt={`Charm ${idx}`} fill className="object-contain p-1" />
+                    {selectedIdx === idx && <div className="absolute inset-0 bg-brand-mint/10 flex items-center justify-center"><Check size={12} className="text-brand-mint bg-white rounded-full p-0.5" /></div>}
+                </button>
+            ))}
+        </div>
+    );
+}
+

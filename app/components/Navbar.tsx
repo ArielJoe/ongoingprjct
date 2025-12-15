@@ -2,9 +2,7 @@
 "use client";
 
 import Link from "next/link";
-import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { ASSETS } from "../lib/constants";
 import { Menu, X } from "lucide-react";
 import { useState } from "react";
 
@@ -31,21 +29,7 @@ export default function Navbar() {
                 <div className="flex justify-between items-center h-20">
                     {/* Logo */}
                     <Link href="/" className="flex items-center gap-2">
-                        <div className="relative h-10 w-auto aspect-[3/1]">
-                            {/* 
-                 The logo is white-text based on filename. 
-                 Since navbar is white glass, we invert it to make it black/visible. 
-                 If you change navbar color to dark, remove 'invert'.
-               */}
-                            <Image
-                                src={ASSETS.logo}
-                                alt="Ongoing Project"
-                                width={120}
-                                height={40}
-                                className="object-contain invert brightness-0"
-                            />
-                        </div>
-                        <span className="font-bold text-xl tracking-tight text-brand-dark hidden sm:block">Ongoing Project</span>
+                        <span className="font-bold text-xl tracking-tight text-brand-dark">Ongoing Project</span>
                     </Link>
 
                     {/* Desktop Menu */}
