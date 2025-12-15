@@ -88,23 +88,27 @@ export default function CustomizerPage() {
         A: { x: 0.5, y: 0.85, scale: 0.28 },
     };
 
-    // Helper: Load Image with Cache (Robust)
-    const loadImage = (src: string): Promise<HTMLImageElement | null> => {
-        if (imageCache.current.has(src)) {
-            return Promise.resolve(imageCache.current.get(src)!);
+    // Helper: Load Image with Cache (Robust with decode)
+    const loadImage = async (src: string): Promise<HTMLImageElement | null> => {
+        if (imageCache.current.has(src)) return imageCache.current.get(src)!;
+
+        const img = new window.Image();
+        img.src = src;
+        try {
+            await img.decode();
+            imageCache.current.set(src, img);
+            return img;
+        } catch (err) {
+            console.error(`Failed to decode image: ${src}`, err);
+            // Fallback to standard load
+            return new Promise((resolve) => {
+                img.onload = () => {
+                    imageCache.current.set(src, img);
+                    resolve(img);
+                };
+                img.onerror = () => resolve(null);
+            });
         }
-        return new Promise((resolve) => {
-            const img = new window.Image();
-            img.src = src;
-            img.onload = () => {
-                imageCache.current.set(src, img);
-                resolve(img);
-            };
-            img.onerror = () => {
-                console.error(`Failed to load image: ${src}`);
-                resolve(null);
-            };
-        });
     };
 
     // Helper: Screen to Canvas Coords
@@ -162,7 +166,6 @@ export default function CustomizerPage() {
             try {
                 // Base
                 const basePath = ASSETS.keychains[state.baseIndex];
-                const baseImgPromise = loadImage(basePath);
 
                 // Charms to draw
                 const charmRequests: { path: string, x: number, y: number, scale: number, isSelected: boolean, id?: string }[] = [];
@@ -186,7 +189,7 @@ export default function CustomizerPage() {
 
                 // Wait for all images
                 const [baseImg, ...charmImages] = await Promise.all([
-                    baseImgPromise,
+                    loadImage(basePath),
                     ...charmRequests.map(req => loadImage(req.path))
                 ]);
 
@@ -212,6 +215,14 @@ export default function CustomizerPage() {
                     ctx.shadowOffsetY = 10;
                     ctx.drawImage(baseImg, bx, by, bw, bh);
                     // Base guide removed as per request
+                } else {
+                    // DEBUG: Visual error on canvas
+                    ctx.fillStyle = "#EF4444";
+                    ctx.font = "bold 24px sans-serif";
+                    ctx.textAlign = "center";
+                    ctx.fillText("Error: Gagal memuat gambar base.", CANVAS_SIZE / 2, CANVAS_SIZE / 2);
+                    ctx.font = "16px sans-serif";
+                    ctx.fillText(basePath || "Unknown path", CANVAS_SIZE / 2, CANVAS_SIZE / 2 + 30);
                 }
 
                 ctx.shadowColor = "transparent";
