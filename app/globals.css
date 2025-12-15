@@ -21,22 +21,27 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-poppins), sans-serif;
   
-  --color-brand-mint: var(--color-mint);
-  --color-brand-mint-dark: var(--color-mint-dark);
-  --color-brand-yellow: var(--color-yellow);
-  --color-brand-yellow-dark: var(--color-yellow-dark);
-  --color-brand-pink: var(--color-pink);
-  --color-brand-pink-dark: var(--color-pink-dark);
-  --color-brand-dark: var(--color-dark);
+  --color-brand-mint: #10B981;
+  --color-brand-mint-dark: #059669;
+  --color-brand-yellow: #FCD34D;
+  --color-brand-yellow-dark: #D97706;
+  --color-brand-pink: #F472B6;
+  --color-brand-pink-dark: #DB2777;
+  --color-brand-dark: #111827;
 }
 
-body,
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
 button,
 input,
 select,
 textarea {
-  background: var(--background);
-  color: var(--foreground);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;

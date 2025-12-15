@@ -35,7 +35,9 @@ export default function Navbar() {
                     {/* Desktop Menu */}
                     <div className="hidden md:flex items-center space-x-8">
                         <Link href="/" className={linkClass("/")}>Home</Link>
-                        <Link href="/customizer" className={linkClass("/customizer")}>Customize Keychain</Link>
+                        {pathname !== "/customizer" && (
+                            <Link href="/customizer" className={linkClass("/customizer")}>Customize Keychain</Link>
+                        )}
                         {pathname !== "/customizer" && (
                             <>
                                 <Link href="#products" className="text-gray-600 hover:text-brand-mint font-medium transition-colors">Products</Link>
@@ -75,13 +77,15 @@ export default function Navbar() {
                         >
                             Home
                         </Link>
-                        <Link
-                            href="/customizer"
-                            className={mobileLinkClass("/customizer")}
-                            onClick={() => setIsOpen(false)}
-                        >
-                            Customize Keychain
-                        </Link>
+                        {pathname !== "/customizer" && (
+                            <Link
+                                href="/customizer"
+                                className={mobileLinkClass("/customizer")}
+                                onClick={() => setIsOpen(false)}
+                            >
+                                Customize Keychain
+                            </Link>
+                        )}
                         {pathname !== "/customizer" && (
                             <>
                                 <Link
