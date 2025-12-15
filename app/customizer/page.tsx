@@ -88,20 +88,22 @@ export default function CustomizerPage() {
         A: { x: 0.5, y: 0.85, scale: 0.28 },
     };
 
-    // Helper: Load Image with Cache
-    const loadImage = (src: string): Promise<HTMLImageElement> => {
+    // Helper: Load Image with Cache (Robust)
+    const loadImage = (src: string): Promise<HTMLImageElement | null> => {
         if (imageCache.current.has(src)) {
             return Promise.resolve(imageCache.current.get(src)!);
         }
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve) => {
             const img = new window.Image();
-            // Removed crossOrigin="anonymous" to prevent loading errors on same-origin local assets
             img.src = src;
             img.onload = () => {
                 imageCache.current.set(src, img);
                 resolve(img);
             };
-            img.onerror = reject;
+            img.onerror = () => {
+                console.error(`Failed to load image: ${src}`);
+                resolve(null);
+            };
         });
     };
 
@@ -151,51 +153,85 @@ export default function CustomizerPage() {
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
 
-        const render = async () => {
-            ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+        let isMounted = true;
 
-            ctx.save();
-            ctx.translate(CANVAS_SIZE / 2, CANVAS_SIZE / 2);
-            ctx.scale(state.zoom, state.zoom);
-            ctx.translate(-CANVAS_SIZE / 2, -CANVAS_SIZE / 2);
+        const render = async () => {
+            // 1. Pre-load all assets first
+            // Don't clear rect yet!
 
             try {
-                // 1. Draw Base
+                // Base
                 const basePath = ASSETS.keychains[state.baseIndex];
-                const baseImg = await loadImage(basePath);
+                const baseImgPromise = loadImage(basePath);
 
-                const baseScale = 0.8;
-                const bw = CANVAS_SIZE * baseScale;
-                const bh = (bw / baseImg.width) * baseImg.height;
-                const bx = (CANVAS_SIZE - bw) / 2;
-                const by = (CANVAS_SIZE - bh) / 2;
+                // Charms to draw
+                const charmRequests: { path: string, x: number, y: number, scale: number, isSelected: boolean, id?: string }[] = [];
 
-                ctx.shadowColor = "rgba(0,0,0,0.2)";
-                ctx.shadowBlur = 20;
-                ctx.shadowOffsetY = 10;
-                ctx.drawImage(baseImg, bx, by, bw, bh);
+                if (state.mode === 'fixed') {
+                    if (state.slots.A !== null) charmRequests.push({ path: ASSETS.animals[state.slots.A], ...CHARM_POSITIONS.A, isSelected: false });
+                    if (state.slots.B !== null) charmRequests.push({ path: ASSETS.animals[state.slots.B], ...CHARM_POSITIONS.B, isSelected: false });
+                    if (state.slots.C !== null) charmRequests.push({ path: ASSETS.animals[state.slots.C], ...CHARM_POSITIONS.C, isSelected: false });
+                } else {
+                    state.manualItems.forEach(item => {
+                        charmRequests.push({
+                            path: ASSETS.animals[item.charmIndex],
+                            x: item.x,
+                            y: item.y,
+                            scale: item.z,
+                            isSelected: item.id === draggedItem,
+                            id: item.id
+                        });
+                    });
+                }
 
-                // Draw Base Center Guide
-                if (state.mode === 'manual' && isEditing) {
-                    // Removed gray border guide as requested
+                // Wait for all images
+                const [baseImg, ...charmImages] = await Promise.all([
+                    baseImgPromise,
+                    ...charmRequests.map(req => loadImage(req.path))
+                ]);
+
+                if (!isMounted) return;
+
+                // 2. NOW we draw everything synchronously
+                ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+                ctx.save();
+                ctx.translate(CANVAS_SIZE / 2, CANVAS_SIZE / 2);
+                ctx.scale(state.zoom, state.zoom);
+                ctx.translate(-CANVAS_SIZE / 2, -CANVAS_SIZE / 2);
+
+                // Draw Base
+                if (baseImg) {
+                    const baseScale = 0.8;
+                    const bw = CANVAS_SIZE * baseScale;
+                    const bh = (bw / baseImg.width) * baseImg.height;
+                    const bx = (CANVAS_SIZE - bw) / 2;
+                    const by = (CANVAS_SIZE - bh) / 2;
+
+                    ctx.shadowColor = "rgba(0,0,0,0.2)";
+                    ctx.shadowBlur = 20;
+                    ctx.shadowOffsetY = 10;
+                    ctx.drawImage(baseImg, bx, by, bw, bh);
+                    // Base guide removed as per request
                 }
 
                 ctx.shadowColor = "transparent";
 
-                // 2. Draw Charms
-                const drawItem = async (path: string, x: number, y: number, scale: number, isSelected: boolean) => {
-                    const img = await loadImage(path);
-                    const cw = CANVAS_SIZE * scale;
+                // Draw Charms
+                charmRequests.forEach((req, idx) => {
+                    const img = charmImages[idx];
+                    if (!img) return;
+
+                    const cw = CANVAS_SIZE * req.scale;
                     const ch = (cw / img.width) * img.height;
-                    const cx = (CANVAS_SIZE * x) - (cw / 2);
-                    const cy = (CANVAS_SIZE * y) - (ch / 2);
+                    const cx = (CANVAS_SIZE * req.x) - (cw / 2);
+                    const cy = (CANVAS_SIZE * req.y) - (ch / 2);
 
                     ctx.shadowColor = "rgba(0,0,0,0.1)";
                     ctx.shadowBlur = 5;
                     ctx.drawImage(img, cx, cy, cw, ch);
                     ctx.shadowColor = "transparent";
 
-                    if (state.mode === 'manual' && isEditing && isSelected) {
+                    if (state.mode === 'manual' && isEditing && req.isSelected) {
                         ctx.strokeStyle = '#10B981';
                         ctx.lineWidth = 2 / state.zoom;
                         ctx.setLineDash([5, 5]);
@@ -208,38 +244,24 @@ export default function CustomizerPage() {
                         ctx.arc(cx + cw / 2, cy + ch / 2, 6 / state.zoom, 0, Math.PI * 2);
                         ctx.fill();
                     }
-                };
-
-                if (state.mode === 'fixed') {
-                    if (state.slots.A !== null) await drawItem(ASSETS.animals[state.slots.A], CHARM_POSITIONS.A.x, CHARM_POSITIONS.A.y, CHARM_POSITIONS.A.scale, false);
-                    if (state.slots.B !== null) await drawItem(ASSETS.animals[state.slots.B], CHARM_POSITIONS.B.x, CHARM_POSITIONS.B.y, CHARM_POSITIONS.B.scale, false);
-                    if (state.slots.C !== null) await drawItem(ASSETS.animals[state.slots.C], CHARM_POSITIONS.C.x, CHARM_POSITIONS.C.y, CHARM_POSITIONS.C.scale, false);
-                } else {
-                    for (const item of state.manualItems) {
-                        await drawItem(ASSETS.animals[item.charmIndex], item.x, item.y, item.z, item.id === draggedItem);
-                    }
-                }
-
-                // 3. Draw Guides (Manual Mode & Editing Only)
-                if (state.mode === 'manual' && isEditing) {
-                    // Reset shadow
-                    ctx.shadowColor = "transparent";
-                }
+                });
 
             } catch (err) {
                 console.error("Render error", err);
+            } finally {
+                ctx.restore();
             }
-            ctx.restore();
         };
 
         render();
 
         // Initial preview generation only if not dragging
         if (!draggedItem) {
-            // Debounce preview update slightly to avoid hitting it too hard during non-drag re-renders
             const timeout = setTimeout(updatePreview, 500);
             return () => clearTimeout(timeout);
         }
+
+        return () => { isMounted = false; };
     }, [state, isEditing, draggedItem]);
 
     // -------------------
