@@ -90,6 +90,10 @@ export default function CustomizerPage() {
 
     // Helper: Load Image with Cache (Robust with decode)
     const loadImage = async (src: string): Promise<HTMLImageElement | null> => {
+        // Cache bust for debugging production issues
+        // const cacheBustedSrc = `${src}?t=${Date.now()}`; 
+        // caching might be important for perf, so let's stick to src but log errors carefully.
+
         if (imageCache.current.has(src)) return imageCache.current.get(src)!;
 
         const img = new window.Image();
@@ -106,7 +110,10 @@ export default function CustomizerPage() {
                     imageCache.current.set(src, img);
                     resolve(img);
                 };
-                img.onerror = () => resolve(null);
+                img.onerror = (e) => {
+                    console.error("Image load failed standard way too", src, e);
+                    resolve(null);
+                };
             });
         }
     };
@@ -627,6 +634,33 @@ export default function CustomizerPage() {
                                 <p className="text-xs text-center text-gray-400 mt-2">*Simpan gambar desain sebelum order.</p>
                             </div>
                         </div>
+
+                        {/* DEBUG: Asset Verification */}
+                        <div className="mt-8 p-4 bg-gray-100 rounded-xl text-xs text-gray-500 overflow-hidden">
+                            <p className="font-bold mb-2">Debug Assets (Production Check):</p>
+                            <div className="flex gap-2 items-center">
+                                <div>
+                                    <span>Base:</span>
+                                    <img src={ASSETS.keychains[state.baseIndex]} alt="Debug Base" className="w-16 h-16 object-contain border border-gray-300 bg-white" />
+                                </div>
+                                {state.mode === 'fixed'
+                                    ? (['A', 'B', 'C'] as CharmSlot[]).map(slot => state.slots[slot] !== null && (
+                                        <div key={slot}>
+                                            <span>Slot {slot}:</span>
+                                            <img src={ASSETS.animals[state.slots[slot]!]} alt="Debug Charm" className="w-16 h-16 object-contain border border-gray-300 bg-white" />
+                                        </div>
+                                    ))
+                                    : state.manualItems.map((item, i) => (
+                                        <div key={item.id}>
+                                            <span>Item {i}:</span>
+                                            <img src={ASSETS.animals[item.charmIndex]} alt="Debug Manual" className="w-16 h-16 object-contain border border-gray-300 bg-white" />
+                                        </div>
+                                    ))
+                                }
+                            </div>
+                            <p className="mt-2">If these images appear, the file paths are correct. If Canvas is blank, it's a Canvas API issue.</p>
+                        </div>
+
                     </div>
                 </div>
             </main>
