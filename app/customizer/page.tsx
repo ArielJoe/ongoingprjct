@@ -95,7 +95,7 @@ export default function CustomizerPage() {
         }
         return new Promise((resolve, reject) => {
             const img = new window.Image();
-            img.crossOrigin = "anonymous";
+            // Removed crossOrigin="anonymous" to prevent loading errors on same-origin local assets
             img.src = src;
             img.onload = () => {
                 imageCache.current.set(src, img);
@@ -111,8 +111,9 @@ export default function CustomizerPage() {
         let clientX, clientY;
 
         if ('touches' in e) {
-            clientX = e.touches[0].clientX;
-            clientY = e.touches[0].clientY;
+            const touch = e.touches[0] || e.changedTouches[0];
+            clientX = touch.clientX;
+            clientY = touch.clientY;
         } else {
             clientX = (e as React.MouseEvent).clientX;
             clientY = (e as React.MouseEvent).clientY;
